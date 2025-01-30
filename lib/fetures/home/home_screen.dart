@@ -89,12 +89,18 @@ class _HomeScreenState extends State<HomeScreen> {
     _currentLocation = await _geolocatorServices.determinePosition();
 
     // Update the location for both Imposter and Crewmate players if they are alive
-    if (_playerRole == "Imposter") {
-      await databaseRef.set({
-        'Lat': _currentLocation!.latitude,
-        'Long': _currentLocation!.longitude,
-        'Team': widget.teamName,
-      });
+
+    if (_playerRole == "Imposter" ) {
+     
+      try {
+        await databaseRef.set({
+          'Lat': _currentLocation!.latitude,
+          'Long': _currentLocation!.longitude,
+          'Team': widget.teamName,
+        });
+      } catch (e) {
+        print('Failed to update location: $e');
+      }
     }
   }
 
@@ -198,6 +204,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         .doc(GlobalteamName)
                         .get(),
                     builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+                        return const Center(child: Text('Error loading tasks'));
+                      }
                       if (snapshot.data!["randomTask"] == "1") {
                         return const SizedBox(
                             height: 500, child: Center(child: TasksScreen1()));

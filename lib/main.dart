@@ -27,6 +27,7 @@ Position? location = Position(
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _requestLocationPermissions();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
@@ -36,6 +37,21 @@ void main() async {
   );
 
   runApp(const ProviderScope(child: MyApp()));
+}
+
+Future<void> _requestLocationPermissions() async {
+  LocationPermission permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied) {
+      return Future.error('Location permissions are denied');
+    }
+  }
+
+  if (permission == LocationPermission.deniedForever) {
+    return Future.error(
+        'Location permissions are permanently denied, we cannot request permissions.');
+  }
 }
 
 class MyApp extends StatelessWidget {
