@@ -1,5 +1,5 @@
 import 'dart:async';
-
+import 'dart:convert';
 import 'package:among_us_gdsc/core/geolocator_services.dart';
 import 'package:among_us_gdsc/fetures/death_screen/dead_screen.dart';
 import 'package:among_us_gdsc/fetures/home/widgits/map_widgit.dart';
@@ -10,10 +10,11 @@ import 'package:among_us_gdsc/fetures/voting/voting_screen.dart';
 import 'package:among_us_gdsc/main.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:sliding_sheet2/sliding_sheet2.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.teamName});
@@ -28,6 +29,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final CollectionReference _allPlayersCollection =
       FirebaseFirestore.instance.collection("AllPlayers");
   late Timer _locationUpdateTimer;
+  late WebSocketChannel _channel;
+  bool _isSocketConnected = false;
 
   late final GeolocatorServices _geolocatorServices;
   late final StreamSubscription<DocumentSnapshot> _playerDataSubscription;
@@ -39,19 +42,71 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _geolocatorServices = GeolocatorServices();
     _subscribeToPlayerData();
+    _connectToWebSocket();
 
-    // Initialize the timer in initState
     _locationUpdateTimer =
-        Timer.periodic(const Duration(milliseconds: 50), (timer) {
+        Timer.periodic(const Duration(seconds: 2), (timer) {
       _updatePlayerLocation();
     });
   }
 
+  void _connectToWebSocket() {
+    _channel = WebSocketChannel.connect(
+      Uri.parse('wss://amongusbackend-ady5.onrender.com/ws'), // Your WebSocket URL
+    );
+
+    _channel.stream.listen(
+      (message) {
+        final data = jsonDecode(message);
+        if (data['type'] == 'emergencyMeeting') {
+          _handleEmergencyMeeting(data);
+        } else if (data['type'] == 'playerKilled') {
+          _handlePlayerKilled(data);
+        }
+      },
+      onError: (error) {
+        print('WebSocket error: $error');
+        setState(() => _isSocketConnected = false);
+        Future.delayed(const Duration(seconds: 5), _connectToWebSocket);
+      },
+      onDone: () {
+        print('WebSocket connection closed');
+        setState(() => _isSocketConnected = false);
+        _connectToWebSocket();
+      },
+    );
+
+    // Send initial join message
+    _channel.sink.add(jsonEncode({
+      'type': 'join',
+      'teamName': widget.teamName,
+      'email': FirebaseAuth.instance.currentUser!.email,
+    }));
+
+    setState(() => _isSocketConnected = true);
+  }
+
+  void _handleEmergencyMeeting(Map<String, dynamic> data) {
+    print('Emergency meeting called: $data');
+    // Navigate to voting screen if needed
+  }
+
+  void _handlePlayerKilled(Map<String, dynamic> data) {
+    print('Player killed: $data');
+    if (data['email'] == FirebaseAuth.instance.currentUser!.email) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (ctx) => const DeathScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   @override
   void dispose() {
-    // Cancel the timer and subscription in dispose method
     _locationUpdateTimer.cancel();
     _playerDataSubscription.cancel();
+    _channel.sink.close();
     super.dispose();
   }
 
@@ -60,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
         .doc(FirebaseAuth.instance.currentUser!.email)
         .snapshots()
         .listen((snapshot) {
-      if (!mounted) return; // Check if the widget is still mounted
+      if (!mounted) return;
 
       if (snapshot.data() != null) {
         final data = snapshot.data()! as Map<String, dynamic>;
@@ -75,42 +130,83 @@ class _HomeScreenState extends State<HomeScreen> {
             (route) => false,
           );
         }
-        setState(() {}); // Update the UI with the player's role
+        setState(() {});
       }
     });
   }
 
-  void _updatePlayerLocation() async {
-    if (!mounted) return; // Check if the widget is still mounted
-
-    DatabaseReference databaseRef =
-        FirebaseDatabase.instance.ref('location/${widget.teamName}');
+  Future<void> _updatePlayerLocation() async {
+    if (!mounted || _playerRole != "Imposter") return;
 
     _currentLocation = await _geolocatorServices.determinePosition();
 
-    // Update the location for both Imposter and Crewmate players if they are alive
+    if (_isSocketConnected) {
+      _sendSocketLocationUpdate();
+    } else {
+      _sendHttpLocationUpdate();
+    }
+  }
 
-    if (_playerRole == "Imposter" ) {
-     
-      try {
-        await databaseRef.set({
-          'Lat': _currentLocation!.latitude,
-          'Long': _currentLocation!.longitude,
-          'Team': widget.teamName,
-        });
-      } catch (e) {
-        print('Failed to update location: $e');
+  void _sendSocketLocationUpdate() {
+    try {
+      _channel.sink.add(jsonEncode({
+        'type': 'locationUpdate',
+        'teamName': widget.teamName,
+        'latitude': _currentLocation!.latitude,
+        'longitude': _currentLocation!.longitude,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      }));
+    } catch (e) {
+      print('WebSocket location update error: $e');
+      _sendHttpLocationUpdate();
+    }
+  }
+
+  Future<void> _sendHttpLocationUpdate() async {
+    try {
+      final response = await http.post(
+        Uri.parse('https://amongus-backend.onrender.com/api/teams/location'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'teamName': widget.teamName,
+          'latitude': _currentLocation!.latitude,
+          'longitude': _currentLocation!.longitude,
+        }),
+      );
+      if (response.statusCode != 200) {
+        print('Failed to update location: ${response.body}');
       }
+    } catch (e) {
+      print('HTTP Failed to update location: $e');
+    }
+  }
+
+  Future<void> _callEmergencyMeeting() async {
+    try {
+      if (_isSocketConnected) {
+        _channel.sink.add(jsonEncode({
+          'type': 'emergencyMeeting',
+          'teamName': widget.teamName,
+          'caller': FirebaseAuth.instance.currentUser!.email,
+        }));
+      } else {
+        final response = await http.post(
+          Uri.parse('https://amongus-backend.onrender.com/api/game/emergency'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'teamName': widget.teamName,
+            'caller': FirebaseAuth.instance.currentUser!.email,
+          }),
+        );
+        print('Emergency meeting called: ${response.body}');
+      }
+    } catch (e) {
+      print('Error calling emergency meeting: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    var gameStatusInstance = FirebaseFirestore.instance
-        .collection("GameStatus")
-        .doc("Status")
-        .snapshots();
-
     return Scaffold(
       backgroundColor: const Color.fromRGBO(255, 249, 219, 1),
       appBar: AppBar(
@@ -125,9 +221,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   height: 40,
                   child: Row(
                     children: [
-                      const SizedBox(
-                        width: 8,
-                      ),
+                      const SizedBox(width: 8),
                       if (_playerRole.isNotEmpty)
                         Text(
                           _playerRole,
@@ -176,10 +270,24 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-      body: StreamBuilder(
-        stream: gameStatusInstance,
+      floatingActionButton: _playerRole == "Crewmate"
+          ? FloatingActionButton(
+              onPressed: _callEmergencyMeeting,
+              child: const Icon(Icons.emergency),
+            )
+          : null,
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("GameStatus")
+            .doc("Status")
+            .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.data!["voting"] == false) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          
+          final gameStatus = snapshot.data!.data() as Map<String, dynamic>;
+          if (gameStatus["voting"] == false) {
             return SlidingSheet(
               elevation: 8,
               cornerRadius: 16,
@@ -197,7 +305,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: NearbyPlayersListWidget(),
                     ),
                   );
-                } else {
+               } else {
                   return FutureBuilder(
                     future: FirebaseFirestore.instance
                         .collection("Teams")
@@ -210,8 +318,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
                         return const Center(child: Text('Error loading tasks'));
                       }
-                      if (snapshot.data!["randomTask"] == "1") {
-                        return const SizedBox(
+                      final teamData = snapshot.data!.data() as Map<String, dynamic>;
+                      if (teamData["randomTask"] == 1) {
+                        return  SizedBox(
                             height: 500, child: Center(child: TasksScreen1()));
                       } else {
                         return SizedBox(

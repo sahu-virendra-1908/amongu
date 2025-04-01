@@ -1,37 +1,177 @@
 import 'dart:async';
-
-import 'package:among_us_gdsc/fetures/home/calculations/distance_calculator.dart';
+import 'dart:convert';
 import 'package:among_us_gdsc/main.dart';
 import 'package:among_us_gdsc/provider/marker_provider.dart';
 import 'package:among_us_gdsc/services/firestore_services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class NearbyPlayersListWidget extends StatefulWidget {
   const NearbyPlayersListWidget({Key? key}) : super(key: key);
 
   @override
-  _NearbyPlayersListWidgetState createState() =>
-      _NearbyPlayersListWidgetState();
+  _NearbyPlayersListWidgetState createState() => _NearbyPlayersListWidgetState();
 }
 
 class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
-  Position? userLocation;
   bool isCooldownActive = false;
   late DateTime cooldownEndTime;
   bool _isButtonDisabled = true;
+  List<Map<String, dynamic>> nearbyTeams = [];
+  DateTime _lastDataUpdateTime = DateTime.now();
+  late WebSocketChannel _channel;
+  Position? _currentPosition;
+  Timer? _locationUpdateTimer;
+  // Timer to clean up stale data
+  Timer? _dataCleanupTimer;
 
   @override
   void initState() {
     super.initState();
     initializeCooldownState();
-    getUserLocation();
+    _connectToWebSocket();
+    _startLocationUpdates();
+    // Set up a timer to clean stale data
+    _dataCleanupTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      _cleanupStaleData();
+    });
+  }
+
+  void _connectToWebSocket() {
+    _channel = WebSocketChannel.connect(
+      Uri.parse('wss://amongusbackend-ady5.onrender.com'), // Change to your server URL
+    );
+
+    _channel.stream.listen((message) {
+      final data = jsonDecode(message);
+      if (data['type'] == 'nearbyTeams' && mounted) {
+        setState(() {
+          // Clear the existing list and use only the most recent data
+          nearbyTeams = [];
+          _lastDataUpdateTime = DateTime.now();
+          
+          // Only add teams from the current message
+          if (data['nearbyTeams'] != null) {
+            List<dynamic> teams = data['nearbyTeams'];
+            nearbyTeams = teams.map<Map<String, dynamic>>((team) {
+              // Add a timestamp to each team entry
+              Map<String, dynamic> teamWithTimestamp = Map<String, dynamic>.from(team);
+              teamWithTimestamp['lastSeen'] = _lastDataUpdateTime.millisecondsSinceEpoch;
+              return teamWithTimestamp;
+            }).toList();
+            print('Received nearby teams: $nearbyTeams');
+          }
+        });
+      }
+    }, onError: (error) {
+      print('WebSocket error: $error');
+      // Add reconnection logic here if needed
+      _reconnectToWebSocket();
+    });
+
+    // Send initial join message
+    _sendTeamJoin();
+  }
+
+  void _reconnectToWebSocket() {
+    // Close existing connection if it's still open
+    try {
+      _channel.sink.close();
+    } catch (e) {
+      print('Error closing existing connection: $e');
+    }
+    
+    // Wait a bit before reconnecting
+    Future.delayed(Duration(seconds: 2), () {
+      if (mounted) {
+        _connectToWebSocket();
+      }
+    });
+  }
+
+  // Method to clean up stale data
+  void _cleanupStaleData() {
+    if (!mounted) return;
+    
+    final now = DateTime.now();
+    const staleThreshold = Duration(seconds: 15); // Consider data older than 15 seconds as stale
+    
+    setState(() {
+      nearbyTeams = nearbyTeams.where((team) {
+        int lastSeen = team['lastSeen'] ?? 0;
+        DateTime lastSeenTime = DateTime.fromMillisecondsSinceEpoch(lastSeen);
+        return now.difference(lastSeenTime) < staleThreshold;
+      }).toList();
+    });
+  }
+
+  Future<void> _startLocationUpdates() async {
+    // Get initial position
+    await _getCurrentPosition();
+    
+    // Set up periodic location updates
+    _locationUpdateTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
+      await _getCurrentPosition();
+    });
+  }
+
+  Future<void> _getCurrentPosition() async {
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+        });
+      }
+      
+      // Send location update to server
+      if (_channel.sink != null) {
+        _channel.sink.add(jsonEncode({
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+        }));
+        print('Sent location update: ${position.latitude}, ${position.longitude}');
+      }
+    } catch (e) {
+      print('Error getting location: $e');
+    }
+  }
+
+  void _sendTeamJoin() {
+    if (_channel.sink != null && GlobalteamName != null) {
+      _channel.sink.add(jsonEncode({
+        'teamName': GlobalteamName,
+      }));
+      print('Sent team join: $GlobalteamName');
+    }
+  }
+
+  Future<void> _fetchNearbyTeams() async {
+    if (_currentPosition != null) {
+      // Clear the existing list first
+      setState(() {
+        nearbyTeams = [];
+      });
+      
+      // Trigger a location update which will automatically broadcast nearby teams
+      await _getCurrentPosition();
+    }
+  }
+
+  @override
+  void dispose() {
+    _locationUpdateTimer?.cancel();
+    _dataCleanupTimer?.cancel();
+    _channel.sink.close();
+    super.dispose();
   }
 
   Future<void> initializeCooldownState() async {
@@ -45,132 +185,66 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
     });
   }
 
-  Future<void> saveCooldownState(bool active, DateTime endTime) async {
+  Future<void> _startCooldown() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('isCooldownActive', active);
-    await prefs.setInt('cooldownEndTimeMillis', endTime.millisecondsSinceEpoch);
-  }
-
-  void getUserLocation() async {
-    Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
     setState(() {
-      userLocation = position;
+      isCooldownActive = true;
+      cooldownEndTime = DateTime.now().add(const Duration(minutes: 1));
     });
+    await prefs.setBool('isCooldownActive', true);
+    await prefs.setInt('cooldownEndTimeMillis', cooldownEndTime.millisecondsSinceEpoch);
   }
 
   @override
   Widget build(BuildContext context) {
-    final dbref = FirebaseDatabase.instance.ref('location');
     return Consumer(
       builder: (context, ref, child) {
         return Scaffold(
           appBar: AppBar(
             actions: [
               IconButton(
-                  onPressed: () {
-                    setState(() {});
-                  },
-                  icon: const Icon(Icons.refresh))
+                onPressed: _fetchNearbyTeams,
+                icon: const Icon(Icons.refresh),
+              )
             ],
           ),
-          backgroundColor: const Color.fromRGBO(255, 249, 219, 1),
           body: Padding(
             padding: const EdgeInsets.only(top: 15, left: 20, right: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (isCooldownActive)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: CountdownTimer(
-                      endTime: cooldownEndTime.millisecondsSinceEpoch,
-                      textStyle: const TextStyle(fontSize: 18),
-                      onEnd: () {
-                        setState(() {
-                          isCooldownActive = false;
-                          saveCooldownState(false, DateTime.now());
-                        });
-                      },
-                    ),
+                  CountdownTimer(
+                    endTime: cooldownEndTime.millisecondsSinceEpoch,
+                    textStyle: const TextStyle(fontSize: 16),
+                    onEnd: () async {
+                      SharedPreferences prefs = await SharedPreferences.getInstance();
+                      await prefs.remove('isCooldownActive');
+                      await prefs.remove('cooldownEndTimeMillis');
+                      if (mounted) {
+                        setState(() => isCooldownActive = false);
+                      }
+                    },
                   ),
                 Expanded(
                   child: SingleChildScrollView(
-                    child: StreamBuilder(
-                      stream: dbref.onValue,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
-
-                        // if (snapshot.hasError) {
-                        //   return Center(
-                        //     child: Text('Error: ${snapshot.error}'),
-                        //   );
-                        // }
-                        if (!snapshot.hasData ||
-                            snapshot.data == null ||
-                            (snapshot.data! as DatabaseEvent).snapshot.value ==
-                                null) {
-                          return const Center(
-                            child: Text("No Data Fetched"),
-                          );
-                        }
-
-                        DataSnapshot dataSnapshot = snapshot.data!.snapshot;
-                        Map<dynamic, dynamic> locationData =
-                            dataSnapshot.value as Map<dynamic, dynamic>;
-
-                        List<String> nearbyTeams = [];
-
-                        locationData.forEach((key, value) {
-                          num destinationLat = value["Lat"];
-                          num destinationLong = value["Long"];
-
-                          if (userLocation != null) {
-                            if (isWithinRadius(
-                              destinationLat,
-                              destinationLong,
-                              userLocation!.latitude,
-                              userLocation!.longitude,
-                              10,
-                            )) {
-                              if (!nearbyTeams.contains(value["Team"])) {
-                                if (value["Team"] != GlobalteamName) {
-                                  nearbyTeams.add(value["Team"]);
-                                }
-                              }
-                            } else {
-                              if (nearbyTeams.contains(value["Team"])) {
-                                nearbyTeams.remove(value["Team"]);
-                              }
-                            }
-                          }
-
-                          ref
-                              .read(teamMarkersProvider.notifier)
-                              .state[value["Team"]] = Marker(
-                            point: LatLng(value["Lat"], value["Long"]),
-                            builder: (context) {
-                              return const Image(
-                                height: 1000,
-                                width: 1000,
-                                image: AssetImage("assets/locationPin.png"),
-                              );
-                            },
-                          );
-                        });
-
-                        if (nearbyTeams.isNotEmpty) {
-                          return ListView.builder(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "Nearby Players",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20),
+                        ),
+                        if (nearbyTeams.isNotEmpty)
+                          ListView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: nearbyTeams.length,
                             itemBuilder: (context, index) {
-                              String team = nearbyTeams[index];
+                              String team = nearbyTeams[index]['teamName'];
+                              double distance = nearbyTeams[index]['distance'];
                               return StreamBuilder(
                                 stream: FirebaseFirestore.instance
                                     .collection("Teams")
@@ -178,116 +252,51 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
                                     .collection("players")
                                     .snapshots(),
                                 builder: (context, teamSnapshot) {
-                                  if (teamSnapshot.hasError) {
-                                    return Text(
-                                        "Error fetching team data: ${teamSnapshot.error}");
+                                  if (!teamSnapshot.hasData) {
+                                    return const CircularProgressIndicator();
                                   }
-
-                                  return Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 8),
-                                      const Text(
-                                        "Nearby Players",
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 20),
-                                      ),
-                                      const SizedBox(height: 10),
-                                      ListView.builder(
-                                        shrinkWrap: true,
-                                        physics:
-                                            const NeverScrollableScrollPhysics(),
-                                        itemCount:
-                                            teamSnapshot.data!.docs.length,
-                                        itemBuilder: (context, playerIndex) {
-                                          var playerDoc = teamSnapshot
-                                              .data!.docs[playerIndex];
-                                          return Card(
-                                            elevation: 0,
-                                            color: const Color.fromRGBO(
-                                                29, 25, 11, 0.459),
-                                            child: ListTile(
-                                              title: Text(
-                                                playerDoc["name"],
-                                                style: const TextStyle(
-                                                    color: Colors.black,
-                                                    fontWeight:
-                                                        FontWeight.bold),
-                                              ),
-                                              subtitle:
-                                                  Text(playerDoc["email"]),
-                                              trailing: ElevatedButton(
-                                                onPressed: () async {
-                                                  // Disable the button immediately
-                                                  setState(() {
-                                                    _isButtonDisabled = true;
-                                                  });
-
-                                                  // Perform the Firebase operation in a microtask
-                                                  Future.microtask(() async {
-                                                    await handleKillPlayer(
-                                                        team, playerDoc.id);
-                                                    setState(() {
-                                                      isCooldownActive = true;
-                                                      cooldownEndTime =
-                                                          DateTime.now().add(
-                                                              const Duration(
-                                                                  seconds: 10));
-                                                    });
-                                                    await saveCooldownState(
-                                                        true, cooldownEndTime);
-                                                  });
-                                                },
-                                                style: ButtonStyle(
-                                                  shape:
-                                                      MaterialStatePropertyAll(
-                                                          RoundedRectangleBorder(
-                                                              borderRadius:
-                                                                  BorderRadius
-                                                                      .circular(
-                                                                          14))),
-                                                  backgroundColor:
-                                                      isCooldownActive
-                                                          ? MaterialStateProperty
-                                                              .all(const Color
-                                                                  .fromRGBO(121,
-                                                                  85, 72, 1))
-                                                          : MaterialStateProperty
-                                                              .all(const Color
-                                                                  .fromRGBO(75,
-                                                                  62, 26, 1)),
-                                                ),
-                                                child: !isCooldownActive
-                                                    ? const Text(
-                                                        "Kill",
-                                                        style: TextStyle(
-                                                            color: Colors.white,
-                                                            fontWeight:
-                                                                FontWeight
-                                                                    .bold),
-                                                      )
-                                                    : const Icon(
-                                                        Icons.dangerous),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                      const SizedBox(height: 16),
-                                    ],
+                                  return ListView.builder(
+                                    shrinkWrap: true,
+                                    physics: const NeverScrollableScrollPhysics(),
+                                    itemCount: teamSnapshot.data!.docs.length,
+                                    itemBuilder: (context, playerIndex) {
+                                      var playerDoc = teamSnapshot.data!.docs[playerIndex];
+                                      return Card(
+                                        child: ListTile(
+                                          title: Text(playerDoc["name"]),
+                                          subtitle: Text("${distance.toStringAsFixed(1)}m away"),
+                                          trailing: ElevatedButton(
+                                            onPressed: isCooldownActive
+                                                ? null
+                                                : () {
+                                                    _channel.sink.add(jsonEncode({
+                                                      'type': 'killPlayer',
+                                                      'teamName': team,
+                                                      'playerId': playerDoc.id,
+                                                    }));
+                                                    handleKillPlayer(team, playerDoc.id);
+                                                    _startCooldown();
+                                                  },
+                                            child: const Text('Kill'),
+                                          ),
+                                        ),
+                                      );
+                                    },
                                   );
                                 },
                               );
                             },
-                          );
-                        }
-                        print(nearbyTeams);
-                        return const Center(
-                          child: Text("No teams Nearby !!"),
-                        );
-                      },
+                          )
+                        else
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.only(top: 20),
+                              child: Text("No teams nearby!", 
+                                style: TextStyle(fontSize: 16),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -306,7 +315,6 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
         bool isImposter =
             await FirestoreServices().isPlayerAliveImposter(playerId);
         if (isImposter) {
-          // Imposter wants to delete the entire team
           await fireStoreInstance
               .collection("Teams")
               .doc(team)
@@ -326,7 +334,6 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
                 .update({"Character": "imposter"});
           }
         } else {
-          // Non-imposter wants to delete only the player
           await fireStoreInstance
               .collection("Teams")
               .doc(team)
@@ -337,7 +344,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
           await FirestoreServices().markPlayerAsDead(playerId);
         }
       } catch (e) {
-        print("Error removing : $e");
+        print("Error removing player: $e");
       }
     }
   }
@@ -365,9 +372,6 @@ class _CountdownTimerState extends State<CountdownTimer> {
 
   @override
   void initState() {
-    Timer.periodic(const Duration(seconds: 3), (timer) {
-      setState(() {});
-    });
     super.initState();
     _remainingSeconds =
         ((widget.endTime - DateTime.now().millisecondsSinceEpoch) / 1000)

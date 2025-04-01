@@ -1,0 +1,2 @@
+D:/asli_amongus/irl_among_us/android/app/.cxx/Debug/18114h2u/x86_64/CMakeFiles/edit_cache.dir
+D:/asli_amongus/irl_among_us/android/app/.cxx/Debug/18114h2u/x86_64/CMakeFiles/rebuild_cache.dir

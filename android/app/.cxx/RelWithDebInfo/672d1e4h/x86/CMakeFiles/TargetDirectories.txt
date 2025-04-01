@@ -1,0 +1,2 @@
+D:/asli_amongus/irl_among_us/android/app/.cxx/RelWithDebInfo/672d1e4h/x86/CMakeFiles/edit_cache.dir
+D:/asli_amongus/irl_among_us/android/app/.cxx/RelWithDebInfo/672d1e4h/x86/CMakeFiles/rebuild_cache.dir
