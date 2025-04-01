@@ -23,12 +23,9 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
   late DateTime cooldownEndTime;
   bool _isButtonDisabled = true;
   List<Map<String, dynamic>> nearbyTeams = [];
-  DateTime _lastDataUpdateTime = DateTime.now();
   late WebSocketChannel _channel;
   Position? _currentPosition;
   Timer? _locationUpdateTimer;
-  // Timer to clean up stale data
-  Timer? _dataCleanupTimer;
 
   @override
   void initState() {
@@ -36,10 +33,6 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
     initializeCooldownState();
     _connectToWebSocket();
     _startLocationUpdates();
-    // Set up a timer to clean stale data
-    _dataCleanupTimer = Timer.periodic(Duration(seconds: 10), (timer) {
-      _cleanupStaleData();
-    });
   }
 
   void _connectToWebSocket() {
@@ -51,63 +44,17 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
       final data = jsonDecode(message);
       if (data['type'] == 'nearbyTeams' && mounted) {
         setState(() {
-          // Clear the existing list and use only the most recent data
-          nearbyTeams = [];
-          _lastDataUpdateTime = DateTime.now();
-          
-          // Only add teams from the current message
-          if (data['nearbyTeams'] != null) {
-            List<dynamic> teams = data['nearbyTeams'];
-            nearbyTeams = teams.map<Map<String, dynamic>>((team) {
-              // Add a timestamp to each team entry
-              Map<String, dynamic> teamWithTimestamp = Map<String, dynamic>.from(team);
-              teamWithTimestamp['lastSeen'] = _lastDataUpdateTime.millisecondsSinceEpoch;
-              return teamWithTimestamp;
-            }).toList();
-            print('Received nearby teams: $nearbyTeams');
-          }
+          nearbyTeams = List<Map<String, dynamic>>.from(data['nearbyTeams'] ?? []);
+          print('Received nearby teams: $nearbyTeams');
         });
       }
     }, onError: (error) {
       print('WebSocket error: $error');
       // Add reconnection logic here if needed
-      _reconnectToWebSocket();
     });
 
     // Send initial join message
     _sendTeamJoin();
-  }
-
-  void _reconnectToWebSocket() {
-    // Close existing connection if it's still open
-    try {
-      _channel.sink.close();
-    } catch (e) {
-      print('Error closing existing connection: $e');
-    }
-    
-    // Wait a bit before reconnecting
-    Future.delayed(Duration(seconds: 2), () {
-      if (mounted) {
-        _connectToWebSocket();
-      }
-    });
-  }
-
-  // Method to clean up stale data
-  void _cleanupStaleData() {
-    if (!mounted) return;
-    
-    final now = DateTime.now();
-    const staleThreshold = Duration(seconds: 15); // Consider data older than 15 seconds as stale
-    
-    setState(() {
-      nearbyTeams = nearbyTeams.where((team) {
-        int lastSeen = team['lastSeen'] ?? 0;
-        DateTime lastSeenTime = DateTime.fromMillisecondsSinceEpoch(lastSeen);
-        return now.difference(lastSeenTime) < staleThreshold;
-      }).toList();
-    });
   }
 
   Future<void> _startLocationUpdates() async {
@@ -133,7 +80,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
       }
       
       // Send location update to server
-      if (_channel.sink != null) {
+      if (_channel != null && _channel.sink != null) {
         _channel.sink.add(jsonEncode({
           'latitude': position.latitude,
           'longitude': position.longitude,
@@ -146,7 +93,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
   }
 
   void _sendTeamJoin() {
-    if (_channel.sink != null && GlobalteamName != null) {
+    if (_channel != null && _channel.sink != null && GlobalteamName != null) {
       _channel.sink.add(jsonEncode({
         'teamName': GlobalteamName,
       }));
@@ -156,11 +103,6 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
 
   Future<void> _fetchNearbyTeams() async {
     if (_currentPosition != null) {
-      // Clear the existing list first
-      setState(() {
-        nearbyTeams = [];
-      });
-      
       // Trigger a location update which will automatically broadcast nearby teams
       await _getCurrentPosition();
     }
@@ -169,7 +111,6 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
   @override
   void dispose() {
     _locationUpdateTimer?.cancel();
-    _dataCleanupTimer?.cancel();
     _channel.sink.close();
     super.dispose();
   }
@@ -288,14 +229,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
                             },
                           )
                         else
-                          const Center(
-                            child: Padding(
-                              padding: EdgeInsets.only(top: 20),
-                              child: Text("No teams nearby!", 
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                          ),
+                          const Center(child: Text("No teams Nearby!")),
                       ],
                     ),
                   ),
