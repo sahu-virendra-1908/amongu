@@ -10,15 +10,17 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
-class NearbyPlayersListWidget extends StatefulWidget {
+class NearbyPlayersListWidget extends ConsumerStatefulWidget {
   const NearbyPlayersListWidget({Key? key}) : super(key: key);
 
   @override
-  _NearbyPlayersListWidgetState createState() => _NearbyPlayersListWidgetState();
+  ConsumerState<NearbyPlayersListWidget> createState() => _NearbyPlayersListWidgetState();
 }
 
-class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
+class _NearbyPlayersListWidgetState extends ConsumerState<NearbyPlayersListWidget> {
   bool isCooldownActive = false;
   late DateTime cooldownEndTime;
   bool _isButtonDisabled = true;
@@ -26,6 +28,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
   late WebSocketChannel _channel;
   Position? _currentPosition;
   Timer? _locationUpdateTimer;
+  Map<String, Marker> teamMarkers = {};
 
   @override
   void initState() {
@@ -37,7 +40,7 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
 
   void _connectToWebSocket() {
     _channel = WebSocketChannel.connect(
-      Uri.parse('wss://amongusbackend-ady5.onrender.com'), // Change to your server URL
+      Uri.parse('wss://amongusbackend-ady5.onrender.com'), // Your server URL
     );
 
     _channel.stream.listen((message) {
@@ -46,7 +49,13 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
         setState(() {
           nearbyTeams = List<Map<String, dynamic>>.from(data['nearbyTeams'] ?? []);
           print('Received nearby teams: $nearbyTeams');
+          
+          // Update markers for each team
+          _updateTeamMarkers(data);
         });
+      } else if (data['type'] == 'locationUpdates' && mounted) {
+        // Handle location updates from all players
+        _updateLocationMarkers(data['locations']);
       }
     }, onError: (error) {
       print('WebSocket error: $error');
@@ -56,13 +65,77 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
     // Send initial join message
     _sendTeamJoin();
   }
+  
+  void _updateTeamMarkers(Map<String, dynamic> data) {
+    // Clear existing markers if needed
+    teamMarkers.clear();
+    
+    // Add markers for each team location
+    if (data.containsKey('teamsLocations')) {
+      Map<String, dynamic> locations = data['teamsLocations'];
+      locations.forEach((teamName, location) {
+        if (location is Map && location.containsKey('latitude') && location.containsKey('longitude')) {
+          double lat = location['latitude'];
+          double lng = location['longitude'];
+          
+          teamMarkers[teamName] = Marker(
+            point: LatLng(lat, lng),
+            builder: (context) {
+              return const Image(
+                height: 40,
+                width: 40,
+                image: AssetImage("assets/locationPin.png"),
+              );
+            },
+          );
+        }
+      });
+      
+      // Update the marker provider
+      if (mounted) {
+        ref.read(teamMarkersProvider.notifier).state = Map.from(teamMarkers);
+      }
+    }
+  }
+  
+  void _updateLocationMarkers(List<dynamic> locations) {
+    if (locations == null) return;
+    
+    for (var location in locations) {
+      if (location is Map && 
+          location.containsKey('teamName') && 
+          location.containsKey('latitude') && 
+          location.containsKey('longitude')) {
+        
+        String teamName = location['teamName'];
+        double lat = location['latitude'];
+        double lng = location['longitude'];
+        
+        teamMarkers[teamName] = Marker(
+          point: LatLng(lat, lng),
+          builder: (context) {
+            return const Image(
+              height: 40,
+              width: 40,
+              image: AssetImage("assets/locationPin.png"),
+            );
+          },
+        );
+      }
+    }
+    
+    // Update the marker provider with all markers
+    if (mounted) {
+      ref.read(teamMarkersProvider.notifier).state = Map.from(teamMarkers);
+    }
+  }
 
   Future<void> _startLocationUpdates() async {
     // Get initial position
     await _getCurrentPosition();
     
     // Set up periodic location updates
-    _locationUpdateTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
+    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       await _getCurrentPosition();
     });
   }
@@ -80,8 +153,10 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
       }
       
       // Send location update to server
-      if (_channel != null && _channel.sink != null) {
+      if (_channel.sink != null) {
         _channel.sink.add(jsonEncode({
+          'type': 'locationUpdate',
+          'teamName': GlobalteamName,
           'latitude': position.latitude,
           'longitude': position.longitude,
         }));
@@ -93,8 +168,9 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
   }
 
   void _sendTeamJoin() {
-    if (_channel != null && _channel.sink != null && GlobalteamName != null) {
+    if (_channel.sink != null && GlobalteamName != null) {
       _channel.sink.add(jsonEncode({
+        'type': 'joinTeam',
         'teamName': GlobalteamName,
       }));
       print('Sent team join: $GlobalteamName');
@@ -103,8 +179,13 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
 
   Future<void> _fetchNearbyTeams() async {
     if (_currentPosition != null) {
-      // Trigger a location update which will automatically broadcast nearby teams
-      await _getCurrentPosition();
+      // Request nearby teams explicitly
+      _channel.sink.add(jsonEncode({
+        'type': 'getNearbyTeams',
+        'teamName': GlobalteamName,
+        'latitude': _currentPosition!.latitude,
+        'longitude': _currentPosition!.longitude,
+      }));
     }
   }
 
@@ -138,73 +219,136 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer(
-      builder: (context, ref, child) {
-        return Scaffold(
-          appBar: AppBar(
-            actions: [
-              IconButton(
-                onPressed: _fetchNearbyTeams,
-                icon: const Icon(Icons.refresh),
-              )
-            ],
-          ),
-          body: Padding(
-            padding: const EdgeInsets.only(top: 15, left: 20, right: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+    final markers = ref.watch(teamMarkersProvider);
+    
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Nearby Enemies'),
+        actions: [
+          IconButton(
+            onPressed: _fetchNearbyTeams,
+            icon: const Icon(Icons.refresh),
+          )
+        ],
+      ),
+      body: Column(
+        children: [
+          // Map section to show markers
+          SizedBox(
+            height: 200,
+            child: FlutterMap(
+              options: MapOptions(
+                center: _currentPosition != null
+                    ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+                    : LatLng(0, 0),
+                zoom: 15,
+              ),
               children: [
-                if (isCooldownActive)
-                  CountdownTimer(
-                    endTime: cooldownEndTime.millisecondsSinceEpoch,
-                    textStyle: const TextStyle(fontSize: 16),
-                    onEnd: () async {
-                      SharedPreferences prefs = await SharedPreferences.getInstance();
-                      await prefs.remove('isCooldownActive');
-                      await prefs.remove('cooldownEndTimeMillis');
-                      if (mounted) {
-                        setState(() => isCooldownActive = false);
-                      }
-                    },
-                  ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "Nearby Players",
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 20),
+                TileLayer(
+                  urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  subdomains: const ['a', 'b', 'c'],
+                ),
+                MarkerLayer(
+                  markers: [
+                    // Current user marker
+                    if (_currentPosition != null)
+                      Marker(
+                        point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                        builder: (ctx) => const Icon(
+                          Icons.location_on,
+                          color: Colors.blue,
+                          size: 40,
                         ),
-                        if (nearbyTeams.isNotEmpty)
-                          ListView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: nearbyTeams.length,
-                            itemBuilder: (context, index) {
-                              String team = nearbyTeams[index]['teamName'];
-                              double distance = nearbyTeams[index]['distance'];
-                              return StreamBuilder(
-                                stream: FirebaseFirestore.instance
-                                    .collection("Teams")
-                                    .doc(team)
-                                    .collection("players")
-                                    .snapshots(),
-                                builder: (context, teamSnapshot) {
-                                  if (!teamSnapshot.hasData) {
-                                    return const CircularProgressIndicator();
-                                  }
-                                  return ListView.builder(
-                                    shrinkWrap: true,
-                                    physics: const NeverScrollableScrollPhysics(),
-                                    itemCount: teamSnapshot.data!.docs.length,
-                                    itemBuilder: (context, playerIndex) {
-                                      var playerDoc = teamSnapshot.data!.docs[playerIndex];
-                                      return Card(
-                                        child: ListTile(
-                                          title: Text(playerDoc["name"]),
+                      ),
+                    // All team markers
+                    ...markers.values.toList(),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          
+          // Cooldown timer if active
+          if (isCooldownActive)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: CountdownTimer(
+                endTime: cooldownEndTime.millisecondsSinceEpoch,
+                textStyle: const TextStyle(
+                  fontSize: 18,
+                  color: Colors.red,
+                  fontWeight: FontWeight.bold,
+                ),
+                onEnd: () async {
+                  SharedPreferences prefs = await SharedPreferences.getInstance();
+                  await prefs.remove('isCooldownActive');
+                  await prefs.remove('cooldownEndTimeMillis');
+                  if (mounted) {
+                    setState(() => isCooldownActive = false);
+                  }
+                },
+              ),
+            ),
+            
+          // Nearby players list
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 15, left: 20, right: 20),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Nearby Players",
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20),
+                    ),
+                    if (nearbyTeams.isNotEmpty)
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: nearbyTeams.length,
+                        itemBuilder: (context, index) {
+                          String team = nearbyTeams[index]['teamName'];
+                          double distance = nearbyTeams[index]['distance'];
+                          return Card(
+                            elevation: 3,
+                            margin: const EdgeInsets.only(bottom: 10),
+                            color: const Color.fromRGBO(255, 200, 200, 1),
+                            child: Column(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(8.0),
+                                  child: Text(
+                                    "Team: $team",
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                                StreamBuilder(
+                                  stream: FirebaseFirestore.instance
+                                      .collection("Teams")
+                                      .doc(team)
+                                      .collection("players")
+                                      .snapshots(),
+                                  builder: (context, teamSnapshot) {
+                                    if (!teamSnapshot.hasData) {
+                                      return const CircularProgressIndicator();
+                                    }
+                                    return ListView.builder(
+                                      shrinkWrap: true,
+                                      physics: const NeverScrollableScrollPhysics(),
+                                      itemCount: teamSnapshot.data!.docs.length,
+                                      itemBuilder: (context, playerIndex) {
+                                        var playerDoc = teamSnapshot.data!.docs[playerIndex];
+                                        return ListTile(
+                                          title: Text(
+                                            playerDoc["name"],
+                                            style: const TextStyle(fontWeight: FontWeight.bold),
+                                          ),
                                           subtitle: Text("${distance.toStringAsFixed(1)}m away"),
                                           trailing: ElevatedButton(
                                             onPressed: isCooldownActive
@@ -218,27 +362,47 @@ class _NearbyPlayersListWidgetState extends State<NearbyPlayersListWidget> {
                                                     handleKillPlayer(team, playerDoc.id);
                                                     _startCooldown();
                                                   },
-                                            child: const Text('Kill'),
+                                            style: ElevatedButton.styleFrom(
+                                              backgroundColor: Colors.red,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius: BorderRadius.circular(14),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              "Kill",
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              );
-                            },
-                          )
-                        else
-                          const Center(child: Text("No teams Nearby!")),
-                      ],
-                    ),
-                  ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      )
+                    else
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20.0),
+                          child: Text(
+                            "No teams nearby!",
+                            style: TextStyle(fontSize: 18),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -333,7 +497,7 @@ class _CountdownTimerState extends State<CountdownTimer> {
     int minutes = (_remainingSeconds / 60).floor();
     int seconds = _remainingSeconds % 60;
     return Text(
-      'Cooldown: ${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
+      'Kill Cooldown: ${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
       style: widget.textStyle,
     );
   }

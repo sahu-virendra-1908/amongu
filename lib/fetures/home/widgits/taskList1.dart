@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
 class TasksScreen1 extends ConsumerWidget {
-  const TasksScreen1({Key? key}) : super(key: key);
+  const TasksScreen1({Key? key}) : super(key: key); // Ensure const constructor
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

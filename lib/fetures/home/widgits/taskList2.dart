@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
 class TasksScreen2 extends ConsumerWidget {
-  List<Map<String, dynamic>> tasks = [
+  static const List<Map<String, dynamic>> tasks = [
     {
       'task': 'Icebreakers',
       'location': '4h',
@@ -49,7 +49,7 @@ class TasksScreen2 extends ConsumerWidget {
     },
   ];
 
-  TasksScreen2({super.key});
+  const TasksScreen2({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

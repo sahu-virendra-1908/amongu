@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:among_us_gdsc/core/geolocator_services.dart';
 import 'package:among_us_gdsc/provider/marker_provider.dart';
 import 'package:flutter/material.dart';

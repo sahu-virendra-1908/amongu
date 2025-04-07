@@ -36,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final StreamSubscription<DocumentSnapshot> _playerDataSubscription;
   Position? _currentLocation;
   String _playerRole = '';
+  late Future<DocumentSnapshot> _teamDataFuture;
 
   @override
   void initState() {
@@ -44,15 +45,20 @@ class _HomeScreenState extends State<HomeScreen> {
     _subscribeToPlayerData();
     _connectToWebSocket();
 
-    _locationUpdateTimer =
-        Timer.periodic(const Duration(seconds: 2), (timer) {
+    _teamDataFuture = FirebaseFirestore.instance
+        .collection("Teams")
+        .doc(GlobalteamName)
+        .get(); // Cache the future
+
+    _locationUpdateTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _updatePlayerLocation();
     });
   }
 
   void _connectToWebSocket() {
     _channel = WebSocketChannel.connect(
-      Uri.parse('wss://amongusbackend-ady5.onrender.com/ws'), // Your WebSocket URL
+      Uri.parse(
+          'wss://amongusbackend-ady5.onrender.com/ws'), // Your WebSocket URL
     );
 
     _channel.stream.listen(
@@ -285,7 +291,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          
+
           final gameStatus = snapshot.data!.data() as Map<String, dynamic>;
           if (gameStatus["voting"] == false) {
             return SlidingSheet(
@@ -300,33 +306,16 @@ class _HomeScreenState extends State<HomeScreen> {
               builder: (context, state) {
                 if (_playerRole == 'Imposter') {
                   return const SizedBox(
-                    height: 500,
-                    child: Center(
-                      child: NearbyPlayersListWidget(),
-                    ),
+                    height: 500, // Ensure proper height for the slider
+                    child: NearbyPlayersListWidget(),
                   );
-               } else {
-                  return FutureBuilder(
-                    future: FirebaseFirestore.instance
-                        .collection("Teams")
-                        .doc(GlobalteamName)
-                        .get(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
-                        return const Center(child: Text('Error loading tasks'));
-                      }
-                      final teamData = snapshot.data!.data() as Map<String, dynamic>;
-                      if (teamData["randomTask"] == 1) {
-                        return  SizedBox(
-                            height: 500, child: Center(child: TasksScreen1()));
-                      } else {
-                        return SizedBox(
-                            height: 500, child: Center(child: TasksScreen2()));
-                      }
-                    },
+                } else if (_playerRole == 'Crewmate') {
+                  return TaskScreenWrapper(
+                      future: _teamDataFuture); // Use wrapper
+                } else {
+                  return const SizedBox(
+                    height: 500,
+                    child: Center(child: Text('No tasks available')),
                   );
                 }
               },
@@ -336,6 +325,43 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         },
       ),
+    );
+  }
+}
+
+// Wrapper widget for task screens
+class TaskScreenWrapper extends StatelessWidget {
+  final Future<DocumentSnapshot> future;
+
+  const TaskScreenWrapper({required this.future, Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+          return const Center(child: Text('Error loading tasks'));
+        }
+
+        final teamData = snapshot.data!.data() as Map<String, dynamic>;
+        if (teamData["randomTask"] == 1) {
+          print("task is 1");
+          return const SizedBox(
+            height: 500,
+            child: TasksScreen1(),
+          );
+        } else {
+          print("task is 2");
+          return const SizedBox(
+            height: 500,
+            child: TasksScreen2(),
+          );
+        }
+      },
     );
   }
 }
