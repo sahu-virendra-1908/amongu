@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as Math;
 import 'package:among_us_gdsc/main.dart';
 import 'package:among_us_gdsc/provider/marker_provider.dart';
 import 'package:among_us_gdsc/services/firestore_services.dart';
@@ -14,6 +15,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+// Create a separate provider for WebSocket markers to avoid mixing with Firebase markers
+final webSocketTeamMarkersProvider =
+    StateProvider<Map<String, Marker>>((ref) => {});
+
+// Keep the original provider for Firebase markers only
 final playerRolesProvider = StateProvider<Map<String, String>>((ref) => {});
 
 class NearbyPlayersListWidget extends ConsumerStatefulWidget {
@@ -28,15 +34,18 @@ class _NearbyPlayersListWidgetState
     extends ConsumerState<NearbyPlayersListWidget> {
   bool isCooldownActive = false;
   late DateTime cooldownEndTime;
-  bool _isButtonDisabled = true;
+  final bool _isButtonDisabled = true;
   List<Map<String, dynamic>> nearbyTeams = [];
   late WebSocketChannel _channel;
   Position? _currentPosition;
   Timer? _locationUpdateTimer;
-  Map<String, Marker> teamMarkers = {};
+  Map<String, Marker> webSocketMarkers =
+      {}; // Store WebSocket markers separately
+  Map<String, Marker> firebaseMarkers = {}; // Store Firebase markers separately
   final MapController _mapController = MapController();
   Map<String, Map<String, String>> teamPlayerRoles = {};
-  final DatabaseReference _firebaseLocationRef = FirebaseDatabase.instance.ref('location');
+  final DatabaseReference _firebaseLocationRef =
+      FirebaseDatabase.instance.ref('location');
   StreamSubscription<DatabaseEvent>? _firebaseLocationSubscription;
 
   @override
@@ -50,31 +59,34 @@ class _NearbyPlayersListWidgetState
   }
 
   void _setupFirebaseLocationListener() {
-    _firebaseLocationSubscription = _firebaseLocationRef.onValue.listen((event) {
+    _firebaseLocationSubscription =
+        _firebaseLocationRef.onValue.listen((event) {
       if (!mounted) return;
-      
+
       final data = event.snapshot.value;
       if (data != null && data is Map) {
-        final locations = data as Map<dynamic, dynamic>;
-        
+        firebaseMarkers.clear(); // Clear existing Firebase markers
+        final locations = data;
+
         locations.forEach((key, value) {
-          if (value is Map && value.containsKey('Team') && 
-              value.containsKey('Lat') && value.containsKey('Long')) {
-            
+          if (value is Map &&
+              value.containsKey('Team') &&
+              value.containsKey('Lat') &&
+              value.containsKey('Long')) {
             String teamName = value['Team'];
             double lat = value['Lat'].toDouble();
             double lng = value['Long'].toDouble();
-            
-            teamMarkers[teamName] = _createMarker(
-              teamName, 
-              LatLng(lat, lng),
-              isCurrentTeam: teamName == GlobalteamName
-            );
+
+            firebaseMarkers[teamName] = _createMarker(
+                teamName, LatLng(lat, lng),
+                isCurrentTeam: teamName == GlobalteamName);
           }
         });
 
         if (mounted) {
-          ref.read(teamMarkersProvider.notifier).state = Map.from(teamMarkers);
+          // Update the Firebase markers provider
+          ref.read(teamMarkersProvider.notifier).state =
+              Map.from(firebaseMarkers);
         }
       }
     }, onError: (error) {
@@ -112,18 +124,36 @@ class _NearbyPlayersListWidgetState
 
   void _connectToWebSocket() {
     _channel = WebSocketChannel.connect(
-      Uri.parse('wss://amongusbackend.onrender.com'),
+      Uri.parse('ws://74.225.188.86:8080'),
     );
 // https://amongusbackend.onrender.com
     _channel.stream.listen((message) {
       final data = jsonDecode(message);
+      print(data);
       if (data['type'] == 'nearbyTeams' && mounted) {
         setState(() {
-          nearbyTeams = List<Map<String, dynamic>>.from(data['nearbyTeams'] ?? []);
-          _updateTeamMarkers(data);
+          // Get the original teams array
+          List<dynamic> teamsData = data['teams'] ?? [];
+
+          // Create a Map to track unique teams by name
+          Map<String, Map<String, dynamic>> uniqueTeams = {};
+
+          // Process each team, keeping only the most recent entry for each team name
+          for (var team in teamsData) {
+            String teamName = team['teamName'];
+            uniqueTeams[teamName] = team;
+          }
+
+          // Convert back to List
+          nearbyTeams =
+              uniqueTeams.values.toList().cast<Map<String, dynamic>>();
+
+          _updateWebSocketMarkers(
+              data); // Use a separate method for WebSocket markers
         });
       } else if (data['type'] == 'locationUpdates' && mounted) {
-        _updateLocationMarkers(data['locations']);
+        _updateWebSocketLocationMarkers(data[
+            'locations']); // Use a separate method for WebSocket location markers
       }
     }, onError: (error) {
       print('WebSocket error: $error');
@@ -141,34 +171,48 @@ class _NearbyPlayersListWidgetState
     _sendTeamJoin();
   }
 
-  void _updateTeamMarkers(Map<String, dynamic> data) {
-    teamMarkers.clear();
+  void _updateWebSocketMarkers(Map<String, dynamic> data) {
+    webSocketMarkers.clear(); // Clear existing WebSocket markers
 
     if (_currentPosition != null) {
-      teamMarkers[GlobalteamName!] = _createMarker(
-        GlobalteamName!,
-        LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-        isCurrentTeam: true
-      );
+      webSocketMarkers[GlobalteamName!] = _createMarker(GlobalteamName!,
+          LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          isCurrentTeam: true);
     }
 
-    if (data.containsKey('nearbyTeams')) {
-      List<Map<String, dynamic>> teams = 
-          List<Map<String, dynamic>>.from(data['nearbyTeams']);
+    // Use the unique nearby teams list to update markers
+    for (var team in nearbyTeams) {
+      String teamName = team['teamName'];
+      // Check if location exists in team data or use distance-based approach
+      if (team.containsKey('location')) {
+        double lat = team['location']['latitude'];
+        double lng = team['location']['longitude'];
 
-      for (var team in teams) {
-        String teamName = team['teamName'];
-        if (team.containsKey('location')) {
-          double lat = team['location']['latitude'];
-          double lng = team['location']['longitude'];
+        webSocketMarkers[teamName] = _createMarker(teamName, LatLng(lat, lng));
+      } else if (_currentPosition != null) {
+        // If no exact location, but we have distance, we can approximate
+        // this is a simple approach that places markers in a circle around the player
+        double distance = team['distance'].toDouble();
+        double bearing =
+            nearbyTeams.indexOf(team) * 45.0; // spread teams around
 
-          teamMarkers[teamName] = _createMarker(teamName, LatLng(lat, lng));
-        }
+        // This is a simple approximation - for real geodesic calculations you'd use a proper algorithm
+        double lat = _currentPosition!.latitude +
+            (distance / 111320) * Math.cos(bearing * Math.pi / 180);
+        double lng = _currentPosition!.longitude +
+            (distance /
+                    (111320 *
+                        Math.cos(_currentPosition!.latitude * Math.pi / 180))) *
+                Math.sin(bearing * Math.pi / 180);
+
+        webSocketMarkers[teamName] = _createMarker(teamName, LatLng(lat, lng));
       }
     }
 
     if (mounted) {
-      ref.read(teamMarkersProvider.notifier).state = Map.from(teamMarkers);
+      // Update the WebSocket markers provider only
+      ref.read(webSocketTeamMarkersProvider.notifier).state =
+          Map.from(webSocketMarkers);
     }
   }
 
@@ -180,22 +224,15 @@ class _NearbyPlayersListWidgetState
     return Marker(
       point: position,
       builder: (context) {
-        return Container(
-          height: 40,
-          width: 40,
-          child: isCurrentTeam
-              ? const Image(image: AssetImage("assets/locationPin.png"))
-              : hasImposter
-                  ? const Image(image: AssetImage("assets/imposterPin.png"))
-                  : const Image(image: AssetImage("assets/crewmatePin.png")),
-        );
+        return SizedBox(
+            height: 40,
+            width: 40,
+            child: const Image(image: AssetImage("assets/locationPin.png")));
       },
     );
   }
 
-  void _updateLocationMarkers(List<dynamic> locations) {
-    if (locations == null) return;
-
+  void _updateWebSocketLocationMarkers(List<dynamic> locations) {
     for (var location in locations) {
       if (location is Map &&
           location.containsKey('teamName') &&
@@ -205,13 +242,15 @@ class _NearbyPlayersListWidgetState
         double lat = location['latitude'];
         double lng = location['longitude'];
 
-        teamMarkers[teamName] = _createMarker(teamName, LatLng(lat, lng),
+        webSocketMarkers[teamName] = _createMarker(teamName, LatLng(lat, lng),
             isCurrentTeam: teamName == GlobalteamName);
       }
     }
 
     if (mounted) {
-      ref.read(teamMarkersProvider.notifier).state = Map.from(teamMarkers);
+      // Update the WebSocket markers provider only
+      ref.read(webSocketTeamMarkersProvider.notifier).state =
+          Map.from(webSocketMarkers);
     }
   }
 
@@ -239,27 +278,25 @@ class _NearbyPlayersListWidgetState
       if (mounted) {
         setState(() => _currentPosition = position);
 
-        if (_mapController != null && teamMarkers.isEmpty) {
+        if (webSocketMarkers.isEmpty) {
           _mapController.move(
               LatLng(position.latitude, position.longitude), 15.0);
         }
       }
 
-      if (_channel.sink != null) {
-        _channel.sink.add(jsonEncode({
-          'type': 'locationUpdate',
-          'teamName': GlobalteamName,
-          'latitude': position.latitude,
-          'longitude': position.longitude,
-        }));
-      }
+      _channel.sink.add(jsonEncode({
+        'type': 'locationUpdate',
+        'teamName': GlobalteamName,
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+      }));
     } catch (e) {
       print('Error getting location: $e');
     }
   }
 
   void _sendTeamJoin() {
-    if (_channel.sink != null && GlobalteamName != null) {
+    if (GlobalteamName != null) {
       _channel.sink.add(jsonEncode({
         'type': 'joinTeam',
         'teamName': GlobalteamName,
@@ -311,23 +348,29 @@ class _NearbyPlayersListWidgetState
 
   @override
   Widget build(BuildContext context) {
-    final markers = ref.watch(teamMarkersProvider);
+    final markers =
+        ref.watch(webSocketTeamMarkersProvider); // Use WebSocket markers for UI
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nearby Enemies', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Color.fromRGBO(255, 249, 219, 1),
-        foregroundColor: Colors.white,
+        title: const Text('Keep refreshing!',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: const Color.fromRGBO(255, 249, 219, 1),
+        foregroundColor: Colors.black,
         actions: [
-          IconButton(onPressed: _fetchNearbyTeams, icon: const Icon(Icons.refresh))
+          IconButton(
+              onPressed: _fetchNearbyTeams, icon: const Icon(Icons.refresh))
         ],
       ),
       body: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [const Color(0xFFF5F5F5), const Color(0xFFE0E0E0)],
+            colors: [
+              Color.fromRGBO(255, 249, 219, 1),
+              Color.fromRGBO(110, 97, 62, 1)
+            ],
           ),
         ),
         child: Column(
@@ -343,7 +386,8 @@ class _NearbyPlayersListWidgetState
                     fontWeight: FontWeight.bold,
                   ),
                   onEnd: () async {
-                    SharedPreferences prefs = await SharedPreferences.getInstance();
+                    SharedPreferences prefs =
+                        await SharedPreferences.getInstance();
                     await prefs.remove('isCooldownActive');
                     await prefs.remove('cooldownEndTimeMillis');
                     if (mounted) setState(() => isCooldownActive = false);
@@ -352,15 +396,20 @@ class _NearbyPlayersListWidgetState
               ),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [Colors.red[800]!, Colors.red[600]!],
+                          colors: [
+                            const Color.fromRGBO(110, 97, 62, 1),
+                            const Color.fromRGBO(110, 97, 62, 0.8)
+                          ],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
@@ -377,7 +426,8 @@ class _NearbyPlayersListWidgetState
                         children: [
                           Icon(Icons.people_alt, color: Colors.white, size: 24),
                           SizedBox(width: 10),
-                          Text("Nearby Players",
+                          Text(
+                            "Nearby Players",
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 20,
@@ -404,9 +454,11 @@ class _NearbyPlayersListWidgetState
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.search_off, size: 48, color: Colors.grey[500]),
+                                    Icon(Icons.search_off,
+                                        size: 48, color: Colors.grey[500]),
                                     const SizedBox(height: 16),
-                                    const Text("No teams nearby!",
+                                    const Text(
+                                      "No teams nearby!",
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.bold,
@@ -414,7 +466,8 @@ class _NearbyPlayersListWidgetState
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    Text("Keep exploring to find enemies",
+                                    Text(
+                                      "Keep exploring to find enemies",
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: Colors.grey[600],
@@ -428,44 +481,58 @@ class _NearbyPlayersListWidgetState
                               itemCount: nearbyTeams.length,
                               itemBuilder: (context, index) {
                                 String team = nearbyTeams[index]['teamName'];
-                                double distance = nearbyTeams[index]['distance'];
-                                bool hasImposter = teamPlayerRoles.containsKey(team) &&
-                                    teamPlayerRoles[team]!.values.contains("imposter");
-                                
+                                double distance =
+                                    nearbyTeams[index]['distance'];
+                                bool hasImposter =
+                                    teamPlayerRoles.containsKey(team) &&
+                                        teamPlayerRoles[team]!
+                                            .values
+                                            .contains("imposter");
+
                                 return Card(
                                   elevation: 4,
-                                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                                  margin: const EdgeInsets.symmetric(
+                                      vertical: 8, horizontal: 4),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                     side: BorderSide(
                                       color: hasImposter
-                                          ? const Color(0xFFE91E63).withOpacity(0.5)
-                                          : const Color(0xFF2196F3).withOpacity(0.5),
+                                          ? const Color.fromRGBO(110, 97, 62, 1)
+                                              .withOpacity(0.5)
+                                          : const Color.fromRGBO(
+                                                  255, 249, 219, 1)
+                                              .withOpacity(0.5),
                                       width: 2,
                                     ),
                                   ),
                                   color: hasImposter
-                                      ? const Color(0xFFFDE0DC)
-                                      : const Color(0xFFE3F2FD),
+                                      ? const Color.fromRGBO(255, 249, 219, 0.8)
+                                      : const Color.fromRGBO(255, 249, 219, 1),
                                   child: Column(
                                     children: [
                                       Container(
                                         decoration: BoxDecoration(
                                           color: hasImposter
-                                              ? const Color(0xFFE91E63)
-                                              : const Color(0xFF2196F3),
+                                              ? const Color.fromRGBO(
+                                                  110, 97, 62, 1)
+                                              : const Color.fromRGBO(
+                                                  110, 97, 62, 0.8),
                                           borderRadius: const BorderRadius.only(
                                             topLeft: Radius.circular(14),
                                             topRight: Radius.circular(14),
                                           ),
                                         ),
                                         width: double.infinity,
-                                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 10, horizontal: 16),
                                         child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
                                           children: [
                                             Icon(
-                                              hasImposter ? Icons.warning : Icons.groups,
+                                              hasImposter
+                                                  ? Icons.warning
+                                                  : Icons.groups,
                                               color: Colors.white,
                                               size: 20,
                                             ),
@@ -493,123 +560,227 @@ class _NearbyPlayersListWidgetState
                                             return const Center(
                                               child: Padding(
                                                 padding: EdgeInsets.all(20.0),
-                                                child: CircularProgressIndicator(),
+                                                child:
+                                                    CircularProgressIndicator(),
                                               ),
                                             );
                                           }
                                           return ListView.builder(
                                             shrinkWrap: true,
-                                            physics: const NeverScrollableScrollPhysics(),
-                                            itemCount: teamSnapshot.data!.docs.length,
-                                            itemBuilder: (context, playerIndex) {
-                                              var playerDoc = teamSnapshot.data!.docs[playerIndex];
-                                              bool isImposter = teamPlayerRoles.containsKey(team) &&
-                                                  teamPlayerRoles[team]!.containsKey(playerDoc.id) &&
-                                                  teamPlayerRoles[team]![playerDoc.id] == "imposter";
+                                            physics:
+                                                const NeverScrollableScrollPhysics(),
+                                            itemCount:
+                                                teamSnapshot.data!.docs.length,
+                                            itemBuilder:
+                                                (context, playerIndex) {
+                                              var playerDoc = teamSnapshot
+                                                  .data!.docs[playerIndex];
+                                              bool isImposter = teamPlayerRoles
+                                                      .containsKey(team) &&
+                                                  teamPlayerRoles[team]!
+                                                      .containsKey(
+                                                          playerDoc.id) &&
+                                                  teamPlayerRoles[team]![
+                                                          playerDoc.id] ==
+                                                      "imposter";
 
                                               return Container(
                                                 decoration: BoxDecoration(
                                                   border: Border(
                                                     bottom: BorderSide(
                                                       color: Colors.grey[300]!,
-                                                      width: playerIndex < teamSnapshot.data!.docs.length - 1 ? 1 : 0,
+                                                      width: playerIndex <
+                                                              teamSnapshot
+                                                                      .data!
+                                                                      .docs
+                                                                      .length -
+                                                                  1
+                                                          ? 1
+                                                          : 0,
                                                     ),
                                                   ),
                                                 ),
                                                 child: ListTile(
-                                                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                                  contentPadding:
+                                                      const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 16,
+                                                          vertical: 6),
                                                   leading: Container(
                                                     width: 40,
                                                     height: 40,
                                                     decoration: BoxDecoration(
                                                       color: isImposter
-                                                          ? Colors.red.withOpacity(0.2)
-                                                          : Colors.blue.withOpacity(0.2),
+                                                          ? const Color
+                                                              .fromRGBO(
+                                                              110, 97, 62, 0.2)
+                                                          : const Color
+                                                              .fromRGBO(255,
+                                                              249, 219, 0.5),
                                                       shape: BoxShape.circle,
                                                     ),
                                                     child: Icon(
-                                                      isImposter ? Icons.dangerous : Icons.person,
-                                                      color: isImposter ? Colors.red : Colors.blue,
+                                                      isImposter
+                                                          ? Icons.dangerous
+                                                          : Icons.person,
+                                                      color: isImposter
+                                                          ? const Color
+                                                              .fromRGBO(
+                                                              110, 97, 62, 1)
+                                                          : const Color
+                                                              .fromRGBO(
+                                                              110, 97, 62, 0.8),
                                                       size: 24,
                                                     ),
                                                   ),
                                                   title: Text(
                                                     playerDoc["name"],
                                                     style: TextStyle(
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                          FontWeight.bold,
                                                       fontSize: 16,
                                                       color: isImposter
-                                                          ? const Color(0xFFD32F2F)
+                                                          ? const Color
+                                                              .fromRGBO(
+                                                              110, 97, 62, 1)
                                                           : Colors.black,
                                                     ),
                                                   ),
                                                   subtitle: Row(
                                                     children: [
-                                                      Icon(Icons.location_on, size: 14, color: Colors.grey[600]),
+                                                      Icon(Icons.location_on,
+                                                          size: 14,
+                                                          color:
+                                                              Colors.grey[600]),
                                                       const SizedBox(width: 4),
-                                                      Text("${distance.toStringAsFixed(1)}m away",
-                                                        style: TextStyle(color: Colors.grey[700]),
+                                                      Text(
+                                                        "${distance.toStringAsFixed(1)}m away",
+                                                        style: TextStyle(
+                                                            color: Colors
+                                                                .grey[700]),
                                                       ),
                                                     ],
                                                   ),
                                                   trailing: isCooldownActive
-                                                    ? const Padding(
-                                                        padding: EdgeInsets.symmetric(horizontal: 8.0),
-                                                        child: Icon(Icons.timer, color: Colors.grey, size: 28),
-                                                      )
-                                                    : Container(
-                                                        width: 80,
-                                                        height: 40,
-                                                        decoration: BoxDecoration(
-                                                          gradient: const LinearGradient(
-                                                            colors: [Color(0xFFFF0000), Color(0xFFB30000)],
-                                                            begin: Alignment.topCenter,
-                                                            end: Alignment.bottomCenter,
-                                                          ),
-                                                          borderRadius: BorderRadius.circular(12),
-                                                          boxShadow: [
-                                                            BoxShadow(
-                                                              color: Colors.red.withOpacity(0.4),
-                                                              spreadRadius: 1,
-                                                              blurRadius: 4,
-                                                              offset: const Offset(0, 2),
+                                                      ? const Padding(
+                                                          padding: EdgeInsets
+                                                              .symmetric(
+                                                                  horizontal:
+                                                                      8.0),
+                                                          child: Icon(
+                                                              Icons.timer,
+                                                              color:
+                                                                  Colors.grey,
+                                                              size: 28),
+                                                        )
+                                                      : Container(
+                                                          width: 80,
+                                                          height: 40,
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            gradient:
+                                                                const LinearGradient(
+                                                              colors: [
+                                                                Color.fromRGBO(
+                                                                    110,
+                                                                    97,
+                                                                    62,
+                                                                    1),
+                                                                Color.fromRGBO(
+                                                                    110,
+                                                                    97,
+                                                                    62,
+                                                                    0.8)
+                                                              ],
+                                                              begin: Alignment
+                                                                  .topCenter,
+                                                              end: Alignment
+                                                                  .bottomCenter,
                                                             ),
-                                                          ],
-                                                        ),
-                                                        child: Material(
-                                                          color: Colors.transparent,
-                                                          child: InkWell(
-                                                            borderRadius: BorderRadius.circular(12),
-                                                            onTap: isCooldownActive
-                                                                ? null
-                                                                : () {
-                                                                    _channel.sink.add(jsonEncode({
-                                                                      'type': 'killPlayer',
-                                                                      'teamName': team,
-                                                                      'playerId': playerDoc.id,
-                                                                    }));
-                                                                    handleKillPlayer(team, playerDoc.id);
-                                                                    _startCooldown();
-                                                                  },
-                                                            child: Center(
-                                                              child: Row(
-                                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                                children: [
-                                                                  const Icon(Icons.local_fire_department, color: Colors.white, size: 20),
-                                                                  const SizedBox(width: 4),
-                                                                  const Text("Kill",
-                                                                    style: TextStyle(
-                                                                      color: Colors.white,
-                                                                      fontWeight: FontWeight.bold,
-                                                                      fontSize: 16,
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        12),
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: const Color
+                                                                        .fromRGBO(
+                                                                        110,
+                                                                        97,
+                                                                        62,
+                                                                        1)
+                                                                    .withOpacity(
+                                                                        0.4),
+                                                                spreadRadius: 1,
+                                                                blurRadius: 4,
+                                                                offset:
+                                                                    const Offset(
+                                                                        0, 2),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          child: Material(
+                                                            color: Colors
+                                                                .transparent,
+                                                            child: InkWell(
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          12),
+                                                              onTap:
+                                                                  isCooldownActive
+                                                                      ? null
+                                                                      : () {
+                                                                          _channel
+                                                                              .sink
+                                                                              .add(jsonEncode({
+                                                                            'type':
+                                                                                'killPlayer',
+                                                                            'teamName':
+                                                                                team,
+                                                                            'playerId':
+                                                                                playerDoc.id,
+                                                                          }));
+                                                                          handleKillPlayer(
+                                                                              team,
+                                                                              playerDoc.id);
+                                                                          _startCooldown();
+                                                                        },
+                                                              child:
+                                                                  const Center(
+                                                                child: Row(
+                                                                  mainAxisAlignment:
+                                                                      MainAxisAlignment
+                                                                          .center,
+                                                                  children: [
+                                                                    Icon(
+                                                                        Icons
+                                                                            .local_fire_department,
+                                                                        color: Colors
+                                                                            .white,
+                                                                        size:
+                                                                            20),
+                                                                    SizedBox(
+                                                                        width:
+                                                                            4),
+                                                                    Text(
+                                                                      "Kill",
+                                                                      style:
+                                                                          TextStyle(
+                                                                        color: Colors
+                                                                            .white,
+                                                                        fontWeight:
+                                                                            FontWeight.bold,
+                                                                        fontSize:
+                                                                            16,
+                                                                      ),
                                                                     ),
-                                                                  ),
-                                                                ],
+                                                                  ],
+                                                                ),
                                                               ),
                                                             ),
                                                           ),
                                                         ),
-                                                      ),
                                                 ),
                                               );
                                             },
@@ -636,7 +807,8 @@ class _NearbyPlayersListWidgetState
     if (!isCooldownActive) {
       try {
         var fireStoreInstance = FirebaseFirestore.instance;
-        bool isImposter = await FirestoreServices().isPlayerAliveImposter(playerId);
+        bool isImposter =
+            await FirestoreServices().isPlayerAliveImposter(playerId);
         if (isImposter) {
           await fireStoreInstance
               .collection("Teams")
@@ -683,10 +855,11 @@ class _NearbyPlayersListWidgetState
                 Text("Player eliminated from $team!"),
               ],
             ),
-            backgroundColor: Colors.red[800],
+            backgroundColor: const Color.fromRGBO(110, 97, 62, 1),
             duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
 
@@ -695,17 +868,18 @@ class _NearbyPlayersListWidgetState
         print("Error removing player: $e");
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Row(
+            content: const Row(
               children: [
-                const Icon(Icons.error, color: Colors.white),
-                const SizedBox(width: 10),
-                const Text("Failed to eliminate player"),
+                Icon(Icons.error, color: Colors.white),
+                SizedBox(width: 10),
+                Text("Failed to eliminate player"),
               ],
             ),
             backgroundColor: Colors.grey[800],
             duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
       }
@@ -761,20 +935,23 @@ class _CountdownTimerState extends State<CountdownTimer> {
   Widget build(BuildContext context) {
     int minutes = (_remainingSeconds / 60).floor();
     int seconds = _remainingSeconds % 60;
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       margin: const EdgeInsets.symmetric(horizontal: 20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.red.shade800, Colors.red.shade600],
+          colors: [
+            const Color.fromRGBO(110, 97, 62, 1),
+            const Color.fromRGBO(110, 97, 62, 0.8)
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.red.withOpacity(0.3),
+            color: const Color.fromRGBO(110, 97, 62, 1).withOpacity(0.3),
             blurRadius: 6,
             offset: const Offset(0, 3),
           ),

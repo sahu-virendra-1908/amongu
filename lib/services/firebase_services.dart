@@ -47,8 +47,10 @@ class FirebaseServices {
   Future<String> logOut(BuildContext context) async {
     try {
       await _auth.signOut().then((value) {
-        Navigator.pushAndRemoveUntil(context,
-            MaterialPageRoute(builder: (_) => LandingPage()), (route) => false);
+        Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const LandingPage()),
+            (route) => false);
       });
 
       return "Success";

@@ -59,8 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _connectToWebSocket() {
     _channel = WebSocketChannel.connect(
-      Uri.parse('ws://amongusbackend.onrender.com'),
-      
+      Uri.parse('ws://74.225.188.86:8080'),
     );
 // wss://74.225.188.86:8080/health
     _channel.stream.listen(
@@ -146,10 +145,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       _currentLocation = await _geolocatorServices.determinePosition();
-      
+
       // Update Firebase Realtime Database
       await _updateFirebaseLocation();
-      
+
       // Also send via WebSocket/HTTP
       if (_isSocketConnected) {
         _sendSocketLocationUpdate();

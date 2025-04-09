@@ -80,7 +80,7 @@ class MyApp extends StatelessWidget {
             bool isAuthenticated = user != null;
 
             if (!isAuthenticated) {
-              return LandingPage();
+              return const LandingPage();
             } else {
               return FutureBuilder<bool>(
                 future: FirestoreServices().isPlayerRegistered(user.email!),

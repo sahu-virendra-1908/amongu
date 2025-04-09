@@ -82,14 +82,14 @@ class SignUp extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton(
                     style: ButtonStyle(
-                      backgroundColor: MaterialStateProperty.all<Color>(
+                      backgroundColor: WidgetStateProperty.all<Color>(
                           const Color.fromRGBO(17, 24, 40, 1)),
-                      shape: MaterialStateProperty.all<RoundedRectangleBorder>(
+                      shape: WidgetStateProperty.all<RoundedRectangleBorder>(
                         RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
                       ),
-                      padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
+                      padding: WidgetStateProperty.all<EdgeInsetsGeometry>(
                         const EdgeInsets.all(16.0),
                       ),
                     ),
@@ -143,7 +143,8 @@ class SignUp extends StatelessWidget {
                         // Handle navigation to sign-up page
                         Navigator.push(
                           context,
-                          MaterialPageRoute(builder: (ctx) => LandingPage()),
+                          MaterialPageRoute(
+                              builder: (ctx) => const LandingPage()),
                         );
                       },
                       child: const Text(

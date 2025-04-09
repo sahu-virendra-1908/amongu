@@ -100,7 +100,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
                     style: TextStyle(
                       fontSize: screenSize.width * 0.05,
                       fontWeight: FontWeight.bold,
-                      color: Color.fromRGBO(110, 97, 62, 1),
+                      color: const Color.fromRGBO(110, 97, 62, 1),
                     ),
                     // ),
                   ),
