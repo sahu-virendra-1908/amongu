@@ -187,30 +187,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _callEmergencyMeeting() async {
-    try {
-      if (_webSocketService.isConnected) {
-        _webSocketService.send({
-          'type': 'emergencyMeeting',
-          'teamName': widget.teamName,
-          'caller': FirebaseAuth.instance.currentUser!.email,
-        });
-      } else {
-        final response = await http.post(
-          Uri.parse('https://amongus-backend.onrender.com/api/game/emergency'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'teamName': widget.teamName,
-            'caller': FirebaseAuth.instance.currentUser!.email,
-          }),
-        );
-        print('Emergency meeting called: ${response.body}');
-      }
-    } catch (e) {
-      print('Error calling emergency meeting: $e');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -276,12 +252,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-      floatingActionButton: _playerRole == "Crewmate"
-          ? FloatingActionButton(
-              onPressed: _callEmergencyMeeting,
-              child: const Icon(Icons.emergency),
-            )
-          : null,
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection("GameStatus")
@@ -320,7 +290,10 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             );
           } else {
-            return PollingScreen(email: GlobalteamName!);
+            // Pass user's email instead of GlobalteamName
+            final String userEmail = FirebaseAuth.instance.currentUser!.email!;
+            print("user email $userEmail");
+            return PollingScreen(email: userEmail);
           }
         },
       ),
