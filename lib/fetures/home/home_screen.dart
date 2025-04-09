@@ -10,6 +10,7 @@ import 'package:among_us_gdsc/fetures/voting/voting_screen.dart';
 import 'package:among_us_gdsc/main.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -28,6 +29,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final CollectionReference _allPlayersCollection =
       FirebaseFirestore.instance.collection("AllPlayers");
+  final DatabaseReference _databaseRef = FirebaseDatabase.instance.ref();
   late Timer _locationUpdateTimer;
   late WebSocketChannel _channel;
   bool _isSocketConnected = false;
@@ -48,7 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _teamDataFuture = FirebaseFirestore.instance
         .collection("Teams")
         .doc(GlobalteamName)
-        .get(); // Cache the future
+        .get();
 
     _locationUpdateTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _updatePlayerLocation();
@@ -57,10 +59,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _connectToWebSocket() {
     _channel = WebSocketChannel.connect(
-      Uri.parse(
-          'wss://amongusbackend-ady5.onrender.com/ws'), // Your WebSocket URL
+      Uri.parse('ws://amongusbackend.onrender.com'),
+      
     );
-
+// wss://74.225.188.86:8080/health
     _channel.stream.listen(
       (message) {
         final data = jsonDecode(message);
@@ -82,7 +84,6 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
 
-    // Send initial join message
     _channel.sink.add(jsonEncode({
       'type': 'join',
       'teamName': widget.teamName,
@@ -94,7 +95,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _handleEmergencyMeeting(Map<String, dynamic> data) {
     print('Emergency meeting called: $data');
-    // Navigate to voting screen if needed
   }
 
   void _handlePlayerKilled(Map<String, dynamic> data) {
@@ -144,12 +144,33 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _updatePlayerLocation() async {
     if (!mounted || _playerRole != "Imposter") return;
 
-    _currentLocation = await _geolocatorServices.determinePosition();
+    try {
+      _currentLocation = await _geolocatorServices.determinePosition();
+      
+      // Update Firebase Realtime Database
+      await _updateFirebaseLocation();
+      
+      // Also send via WebSocket/HTTP
+      if (_isSocketConnected) {
+        _sendSocketLocationUpdate();
+      } else {
+        _sendHttpLocationUpdate();
+      }
+    } catch (e) {
+      print('Location update error: $e');
+    }
+  }
 
-    if (_isSocketConnected) {
-      _sendSocketLocationUpdate();
-    } else {
-      _sendHttpLocationUpdate();
+  Future<void> _updateFirebaseLocation() async {
+    try {
+      await _databaseRef.child('location/${widget.teamName}').set({
+        'Lat': _currentLocation!.latitude,
+        'Long': _currentLocation!.longitude,
+        'Team': widget.teamName,
+        'timestamp': ServerValue.timestamp,
+      });
+    } catch (e) {
+      print('Firebase location update failed: $e');
     }
   }
 
@@ -164,7 +185,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }));
     } catch (e) {
       print('WebSocket location update error: $e');
-      _sendHttpLocationUpdate();
     }
   }
 
@@ -306,12 +326,11 @@ class _HomeScreenState extends State<HomeScreen> {
               builder: (context, state) {
                 if (_playerRole == 'Imposter') {
                   return const SizedBox(
-                    height: 500, // Ensure proper height for the slider
+                    height: 500,
                     child: NearbyPlayersListWidget(),
                   );
                 } else if (_playerRole == 'Crewmate') {
-                  return TaskScreenWrapper(
-                      future: _teamDataFuture); // Use wrapper
+                  return TaskScreenWrapper(future: _teamDataFuture);
                 } else {
                   return const SizedBox(
                     height: 500,
@@ -329,7 +348,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// Wrapper widget for task screens
 class TaskScreenWrapper extends StatelessWidget {
   final Future<DocumentSnapshot> future;
 
@@ -348,6 +366,7 @@ class TaskScreenWrapper extends StatelessWidget {
         }
 
         final teamData = snapshot.data!.data() as Map<String, dynamic>;
+        print("teamData: $teamData");
         if (teamData["randomTask"] == 1) {
           print("task is 1");
           return const SizedBox(

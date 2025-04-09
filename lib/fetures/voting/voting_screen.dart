@@ -54,7 +54,7 @@ class _PollingScreenState extends State<PollingScreen> {
 
   void _loadPollingPage() {
     final pollingUrl =
-        'https://amongus-poll-1ztb-tau.vercel.app/polls/${widget.email}';
+        'https://amongus-poll-eight.vercel.app/${widget.email}';
     _webViewController.loadRequest(Uri.parse(pollingUrl));
   }
 }
