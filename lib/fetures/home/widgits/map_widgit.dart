@@ -19,12 +19,22 @@ class _MapWidgetState extends State<MapWidget> {
   List<Marker> markers = [];
   late final MapController _mapController;
   GeolocatorServices geolocatorServices = GeolocatorServices();
+  Timer? _markersUpdateTimer;
 
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
     _updateLocation();
+
+    // Set up timer to update markers from provider periodically
+    _markersUpdateTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          // This will be automatically populated from Firebase by the teamMarkersProvider
+        });
+      }
+    });
   }
 
   Future<void> _updateLocation() async {
@@ -69,11 +79,8 @@ class _MapWidgetState extends State<MapWidget> {
             ),
             Consumer(
               builder: (context, ref, child) {
-                Timer.periodic(const Duration(seconds: 1), (timer) {
-                  setState(() {
-                    markers = ref.read(teamMarkersProvider).values.toList();
-                  });
-                });
+                // Just use the markers directly from the provider
+                markers = ref.watch(teamMarkersProvider).values.toList();
                 return MarkerLayer(
                   markers: markers,
                 );
@@ -99,6 +106,7 @@ class _MapWidgetState extends State<MapWidget> {
 
   @override
   void dispose() {
+    _markersUpdateTimer?.cancel();
     _mapController.dispose();
     super.dispose();
   }

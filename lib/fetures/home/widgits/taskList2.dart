@@ -8,7 +8,7 @@ import 'package:latlong2/latlong.dart';
 class TasksScreen2 extends ConsumerWidget {
   static const List<Map<String, dynamic>> tasks = [
     {
-      'task': 'Icebreakers',
+      'task': 'chutiya',
       'location': '4h',
     },
     {

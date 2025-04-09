@@ -4,6 +4,7 @@ import 'dart:math' as Math;
 import 'package:among_us_gdsc/main.dart';
 import 'package:among_us_gdsc/provider/marker_provider.dart';
 import 'package:among_us_gdsc/services/firestore_services.dart';
+import 'package:among_us_gdsc/websocket_services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -36,7 +36,9 @@ class _NearbyPlayersListWidgetState
   late DateTime cooldownEndTime;
   final bool _isButtonDisabled = true;
   List<Map<String, dynamic>> nearbyTeams = [];
-  late WebSocketChannel _channel;
+  final WebSocketService _webSocketService =
+      WebSocketService(); // Use singleton
+  late StreamSubscription<Map<String, dynamic>> _socketSubscription;
   Position? _currentPosition;
   Timer? _locationUpdateTimer;
   Map<String, Marker> webSocketMarkers =
@@ -123,52 +125,43 @@ class _NearbyPlayersListWidgetState
   }
 
   void _connectToWebSocket() {
-    _channel = WebSocketChannel.connect(
-      Uri.parse('ws://74.225.188.86:8080'),
-    );
-// https://amongusbackend.onrender.com
-    _channel.stream.listen((message) {
-      final data = jsonDecode(message);
-      print(data);
-      if (data['type'] == 'nearbyTeams' && mounted) {
-        setState(() {
-          // Get the original teams array
-          List<dynamic> teamsData = data['teams'] ?? [];
+    if (GlobalteamName != null) {
+      // Connect using the singleton service
+      _webSocketService.connect(GlobalteamName!);
+      _webSocketService.addListener();
 
-          // Create a Map to track unique teams by name
-          Map<String, Map<String, dynamic>> uniqueTeams = {};
+      // Listen for messages
+      _socketSubscription = _webSocketService.messageStream.listen((data) {
+        print(data);
+        if (data['type'] == 'nearbyTeams' && mounted) {
+          setState(() {
+            // Get the original teams array
+            List<dynamic> teamsData = data['teams'] ?? [];
 
-          // Process each team, keeping only the most recent entry for each team name
-          for (var team in teamsData) {
-            String teamName = team['teamName'];
-            uniqueTeams[teamName] = team;
-          }
+            // Create a Map to track unique teams by name
+            Map<String, Map<String, dynamic>> uniqueTeams = {};
 
-          // Convert back to List
-          nearbyTeams =
-              uniqueTeams.values.toList().cast<Map<String, dynamic>>();
+            // Process each team, keeping only the most recent entry for each team name
+            for (var team in teamsData) {
+              String teamName = team['teamName'];
+              uniqueTeams[teamName] = team;
+            }
 
-          _updateWebSocketMarkers(
-              data); // Use a separate method for WebSocket markers
-        });
-      } else if (data['type'] == 'locationUpdates' && mounted) {
-        _updateWebSocketLocationMarkers(data[
-            'locations']); // Use a separate method for WebSocket location markers
-      }
-    }, onError: (error) {
-      print('WebSocket error: $error');
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) _connectToWebSocket();
+            // Convert back to List
+            nearbyTeams =
+                uniqueTeams.values.toList().cast<Map<String, dynamic>>();
+
+            _updateWebSocketMarkers(
+                data); // Use a separate method for WebSocket markers
+          });
+        } else if (data['type'] == 'locationUpdates' && mounted) {
+          _updateWebSocketLocationMarkers(data['locations']);
+        }
       });
-    }, onDone: () {
-      if (mounted) {
-        Future.delayed(const Duration(seconds: 2), () {
-          _connectToWebSocket();
-        });
-      }
-    });
 
-    _sendTeamJoin();
+      // Send initial join message
+      _sendTeamJoin();
+    }
   }
 
   void _updateWebSocketMarkers(Map<String, dynamic> data) {
@@ -284,12 +277,13 @@ class _NearbyPlayersListWidgetState
         }
       }
 
-      _channel.sink.add(jsonEncode({
+      // Send location update through WebSocket service
+      _webSocketService.send({
         'type': 'locationUpdate',
         'teamName': GlobalteamName,
         'latitude': position.latitude,
         'longitude': position.longitude,
-      }));
+      });
     } catch (e) {
       print('Error getting location: $e');
     }
@@ -297,21 +291,21 @@ class _NearbyPlayersListWidgetState
 
   void _sendTeamJoin() {
     if (GlobalteamName != null) {
-      _channel.sink.add(jsonEncode({
+      _webSocketService.send({
         'type': 'joinTeam',
         'teamName': GlobalteamName,
-      }));
+      });
     }
   }
 
   Future<void> _fetchNearbyTeams() async {
     if (_currentPosition != null) {
-      _channel.sink.add(jsonEncode({
+      _webSocketService.send({
         'type': 'getNearbyTeams',
         'teamName': GlobalteamName,
         'latitude': _currentPosition!.latitude,
         'longitude': _currentPosition!.longitude,
-      }));
+      });
       await _loadTeamPlayerRoles();
     }
   }
@@ -320,7 +314,8 @@ class _NearbyPlayersListWidgetState
   void dispose() {
     _firebaseLocationSubscription?.cancel();
     _locationUpdateTimer?.cancel();
-    _channel.sink.close();
+    _socketSubscription.cancel();
+    _webSocketService.removeListener(); // Properly unregister
     super.dispose();
   }
 
@@ -648,13 +643,9 @@ class _NearbyPlayersListWidgetState
                                                   ),
                                                   subtitle: Row(
                                                     children: [
-                                                      Icon(Icons.location_on,
-                                                          size: 14,
-                                                          color:
-                                                              Colors.grey[600]),
                                                       const SizedBox(width: 4),
                                                       Text(
-                                                        "${distance.toStringAsFixed(1)}m away",
+                                                        "Kill this ant !",
                                                         style: TextStyle(
                                                             color: Colors
                                                                 .grey[700]),
@@ -731,16 +722,15 @@ class _NearbyPlayersListWidgetState
                                                                   isCooldownActive
                                                                       ? null
                                                                       : () {
-                                                                          _channel
-                                                                              .sink
-                                                                              .add(jsonEncode({
+                                                                          _webSocketService
+                                                                              .send({
                                                                             'type':
                                                                                 'killPlayer',
                                                                             'teamName':
                                                                                 team,
                                                                             'playerId':
                                                                                 playerDoc.id,
-                                                                          }));
+                                                                          });
                                                                           handleKillPlayer(
                                                                               team,
                                                                               playerDoc.id);

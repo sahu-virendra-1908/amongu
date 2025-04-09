@@ -8,6 +8,7 @@ import 'package:among_us_gdsc/fetures/home/widgits/taskList1.dart';
 import 'package:among_us_gdsc/fetures/home/widgits/taskList2.dart';
 import 'package:among_us_gdsc/fetures/voting/voting_screen.dart';
 import 'package:among_us_gdsc/main.dart';
+import 'package:among_us_gdsc/websocket_services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -15,7 +16,6 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:sliding_sheet2/sliding_sheet2.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.teamName});
@@ -31,8 +31,9 @@ class _HomeScreenState extends State<HomeScreen> {
       FirebaseFirestore.instance.collection("AllPlayers");
   final DatabaseReference _databaseRef = FirebaseDatabase.instance.ref();
   late Timer _locationUpdateTimer;
-  late WebSocketChannel _channel;
-  bool _isSocketConnected = false;
+  final WebSocketService _webSocketService =
+      WebSocketService(); // Use the singleton
+  late StreamSubscription<Map<String, dynamic>> _socketSubscription;
 
   late final GeolocatorServices _geolocatorServices;
   late final StreamSubscription<DocumentSnapshot> _playerDataSubscription;
@@ -58,38 +59,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _connectToWebSocket() {
-    _channel = WebSocketChannel.connect(
-      Uri.parse('ws://74.225.188.86:8080'),
-    );
-// wss://74.225.188.86:8080/health
-    _channel.stream.listen(
-      (message) {
-        final data = jsonDecode(message);
-        if (data['type'] == 'emergencyMeeting') {
-          _handleEmergencyMeeting(data);
-        } else if (data['type'] == 'playerKilled') {
-          _handlePlayerKilled(data);
-        }
-      },
-      onError: (error) {
-        print('WebSocket error: $error');
-        setState(() => _isSocketConnected = false);
-        Future.delayed(const Duration(seconds: 5), _connectToWebSocket);
-      },
-      onDone: () {
-        print('WebSocket connection closed');
-        setState(() => _isSocketConnected = false);
-        _connectToWebSocket();
-      },
-    );
+    // Connect to WebSocket using our service
+    _webSocketService.connect(widget.teamName);
+    _webSocketService.addListener();
 
-    _channel.sink.add(jsonEncode({
-      'type': 'join',
-      'teamName': widget.teamName,
-      'email': FirebaseAuth.instance.currentUser!.email,
-    }));
-
-    setState(() => _isSocketConnected = true);
+    // Listen for WebSocket messages
+    _socketSubscription = _webSocketService.messageStream.listen((data) {
+      if (data['type'] == 'emergencyMeeting') {
+        _handleEmergencyMeeting(data);
+      } else if (data['type'] == 'playerKilled') {
+        _handlePlayerKilled(data);
+      }
+    });
   }
 
   void _handleEmergencyMeeting(Map<String, dynamic> data) {
@@ -111,7 +92,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _locationUpdateTimer.cancel();
     _playerDataSubscription.cancel();
-    _channel.sink.close();
+    _socketSubscription.cancel();
+    _webSocketService.removeListener(); // Properly unregister
     super.dispose();
   }
 
@@ -149,12 +131,8 @@ class _HomeScreenState extends State<HomeScreen> {
       // Update Firebase Realtime Database
       await _updateFirebaseLocation();
 
-      // Also send via WebSocket/HTTP
-      if (_isSocketConnected) {
-        _sendSocketLocationUpdate();
-      } else {
-        _sendHttpLocationUpdate();
-      }
+      // Send location update through WebSocket service
+      _sendSocketLocationUpdate();
     } catch (e) {
       print('Location update error: $e');
     }
@@ -175,15 +153,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _sendSocketLocationUpdate() {
     try {
-      _channel.sink.add(jsonEncode({
+      _webSocketService.send({
         'type': 'locationUpdate',
         'teamName': widget.teamName,
         'latitude': _currentLocation!.latitude,
         'longitude': _currentLocation!.longitude,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
-      }));
+      });
     } catch (e) {
       print('WebSocket location update error: $e');
+
+      // Fallback to HTTP if WebSocket fails
+      _sendHttpLocationUpdate();
     }
   }
 
@@ -208,12 +189,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _callEmergencyMeeting() async {
     try {
-      if (_isSocketConnected) {
-        _channel.sink.add(jsonEncode({
+      if (_webSocketService.isConnected) {
+        _webSocketService.send({
           'type': 'emergencyMeeting',
           'teamName': widget.teamName,
           'caller': FirebaseAuth.instance.currentUser!.email,
-        }));
+        });
       } else {
         final response = await http.post(
           Uri.parse('https://amongus-backend.onrender.com/api/game/emergency'),
