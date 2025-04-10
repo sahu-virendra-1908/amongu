@@ -1,22 +1,22 @@
 {
   "project_info": {
-    "project_number": "1009487601323",
-    "firebase_url": "https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app",
-    "project_id": "amongusgdsc",
-    "storage_bucket": "amongusgdsc.firebasestorage.app"
+    "project_number": "189863224347",
+    "firebase_url": "https://amongus-9d388-default-rtdb.firebaseio.com",
+    "project_id": "amongus-9d388",
+    "storage_bucket": "amongus-9d388.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:1009487601323:android:df91b8baeb1a0e02e4e1ee",
+        "mobilesdk_app_id": "1:189863224347:android:c9d58b98de8b05d45b04be",
         "android_client_info": {
-          "package_name": "com.amongus.gdsc"
+          "package_name": "com.amongus.among_us_gdsc"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCEltUwA4_OujoKlajRjt30v8ZUnxpsmKA"
+          "current_key": "AIzaSyBRWHDjWiYwoE-KLjlyEWBUgR06ViXJ3qk"
         }
       ],
       "services": {

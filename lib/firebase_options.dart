@@ -41,54 +41,54 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAmfj7CDuZwKKguzzybBG4L8pheJENGt-g',
-    appId: '1:1009487601323:web:43301c80f946ce3fe4e1ee',
-    messagingSenderId: '1009487601323',
-    projectId: 'amongusgdsc',
-    authDomain: 'amongusgdsc.firebaseapp.com',
-    databaseURL: 'https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'amongusgdsc.firebasestorage.app',
-    measurementId: 'G-4WK2DQX6ZX',
+    apiKey: 'AIzaSyDzgiMStIeck1w92Y4-4UjqFTLquA3KPIQ',
+    appId: '1:189863224347:web:822b5fae0638080b5b04be',
+    messagingSenderId: '189863224347',
+    projectId: 'amongus-9d388',
+    authDomain: 'amongus-9d388.firebaseapp.com',
+    databaseURL: 'https://amongus-9d388-default-rtdb.firebaseio.com',
+    storageBucket: 'amongus-9d388.firebasestorage.app',
+    measurementId: 'G-3SGH5LTYY1',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCEltUwA4_OujoKlajRjt30v8ZUnxpsmKA',
-    appId: '1:1009487601323:android:df91b8baeb1a0e02e4e1ee',
-    messagingSenderId: '1009487601323',
-    projectId: 'amongusgdsc',
-    databaseURL: 'https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'amongusgdsc.firebasestorage.app',
+    apiKey: 'AIzaSyBRWHDjWiYwoE-KLjlyEWBUgR06ViXJ3qk',
+    appId: '1:189863224347:android:c9d58b98de8b05d45b04be',
+    messagingSenderId: '189863224347',
+    projectId: 'amongus-9d388',
+    databaseURL: 'https://amongus-9d388-default-rtdb.firebaseio.com',
+    storageBucket: 'amongus-9d388.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCCDDmOrL01zZCBUehQH1ABy62lAAjym-g',
-    appId: '1:1009487601323:ios:585c56aa2afc6e61e4e1ee',
-    messagingSenderId: '1009487601323',
-    projectId: 'amongusgdsc',
-    databaseURL: 'https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'amongusgdsc.firebasestorage.app',
+    apiKey: 'AIzaSyAYYGFvtnpzrI5RDrIgeU_99iKrFXbTpjk',
+    appId: '1:189863224347:ios:de5e4c48e91c413c5b04be',
+    messagingSenderId: '189863224347',
+    projectId: 'amongus-9d388',
+    databaseURL: 'https://amongus-9d388-default-rtdb.firebaseio.com',
+    storageBucket: 'amongus-9d388.firebasestorage.app',
     iosBundleId: 'com.example.amongus',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyCCDDmOrL01zZCBUehQH1ABy62lAAjym-g',
-    appId: '1:1009487601323:ios:585c56aa2afc6e61e4e1ee',
-    messagingSenderId: '1009487601323',
-    projectId: 'amongusgdsc',
-    databaseURL: 'https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'amongusgdsc.firebasestorage.app',
+    apiKey: 'AIzaSyAYYGFvtnpzrI5RDrIgeU_99iKrFXbTpjk',
+    appId: '1:189863224347:ios:de5e4c48e91c413c5b04be',
+    messagingSenderId: '189863224347',
+    projectId: 'amongus-9d388',
+    databaseURL: 'https://amongus-9d388-default-rtdb.firebaseio.com',
+    storageBucket: 'amongus-9d388.firebasestorage.app',
     iosBundleId: 'com.example.amongus',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyAmfj7CDuZwKKguzzybBG4L8pheJENGt-g',
-    appId: '1:1009487601323:web:d3c19ae9465d317ee4e1ee',
-    messagingSenderId: '1009487601323',
-    projectId: 'amongusgdsc',
-    authDomain: 'amongusgdsc.firebaseapp.com',
-    databaseURL: 'https://amongusgdsc-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'amongusgdsc.firebasestorage.app',
-    measurementId: 'G-B2G0ZNYGJM',
+    apiKey: 'AIzaSyDzgiMStIeck1w92Y4-4UjqFTLquA3KPIQ',
+    appId: '1:189863224347:web:822b5fae0638080b5b04be',
+    messagingSenderId: '189863224347',
+    projectId: 'amongus-9d388',
+    authDomain: 'amongus-9d388.firebaseapp.com',
+    databaseURL: 'https://amongus-9d388-default-rtdb.firebaseio.com',
+    storageBucket: 'amongus-9d388.firebasestorage.app',
+    measurementId: 'G-3SGH5LTYY1',
   );
 
 }
